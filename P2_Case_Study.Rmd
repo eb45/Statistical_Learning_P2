@@ -22,25 +22,174 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.width = 6, fig.height = 4)
+library(tidyverse)
+library(caret)
+library(VIM)
+library(mice)
+library(randomForest)
+library(pROC)
+library(MASS)
+library(ggplot2)
 ```
 
-## R Markdown
+### Introduction
+Brief: predict presence of heart disease (num) from clinical variables in heart_disease_uci.csv.
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+### Loading data
+```{r}
+# Loading CSV
+heart_dis <- read.csv("heart_disease_uci.csv", stringsAsFactors = FALSE)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+# Remove unwanted columns
+heart_dis <- heart_dis[ , -c(1,4)]
 
-```{r cars}
-summary(cars)
+# Getting summary
+str(heart_dis)
+summary(heart_dis)
 ```
 
-## Including Plots
+# Initial Visaulization of Data
+```{r}
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+### Missing values and imputation
+```{r}
+# Look what values are missing
+VIM::aggr(heart_dis, numbers = TRUE, sortVars = TRUE, labels = names(heart_dis),
+cex.axis = 0.7, gap = 1, ylab = c("Missing data","Pattern"))
+```
+
+Use the mice library to inspect possible imputations
+```{r}
+mice::md.pattern(heart_dis)
+
+# Median imputation for selected numeric columns
+cols_to_impute <- c("ca", "fbs", "oldpeak", "trestbps", "chol", "thalach", "exang")
+cols_to_impute <- intersect(cols_to_impute, names(heart_dis))
+
+for (col in cols_to_impute) {
+  
+  if (is.numeric(heart_dis[[col]])) {
+    
+    # direct median imputation
+    heart_dis[[col]][is.na(heart_dis[[col]])] <- median(heart_dis[[col]], na.rm = TRUE)
+    
+  } else {
+    
+    # convert to numeric if needed
+    heart_dis[[col]] <- type.convert(heart_dis[[col]], as.is = TRUE)
+    
+    # median imputation after conversion
+    heart_dis[[col]][is.na(heart_dis[[col]])] <- median(as.numeric(heart_dis[[col]]), na.rm = TRUE)
+  }
+}
+```
+
+Verify no null values remain:
+```{r}
+sapply(heart_dis, function(x) sum(is.na(x)))
+summary(heart_dis)
+```
+
+### Feature Engineering
+Convert to binary presence (0 = no disease, 1 = disease)
+```{r}
+if("num" %in% names(heart_dis)){
+  heart_dis$num <- ifelse(as.numeric(heart_dis$num) > 0, 1, 0)
+  heart_dis$num <- factor(heart_dis$num, levels = c(0,1), labels = c("No","Yes"))
+}
+```
+
+Convert obviously categorical numeric columns to factors
+```{r}
+cat_vars <- c("sex","cp","fbs","restecg","exang","slope","ca","thal")
+cat_vars <- intersect(cat_vars, names(heart_dis))
+for(v in cat_vars) heart_dis[[v]] <- factor(heart_dis[[v]])
+
+str(heart_dis)
+```
+
+### Train/Test Split
+```{r}
+set.seed(2025)
+idx <- createDataPartition(heart_dis$num, p = 0.8, list = FALSE)
+
+training <- heart_dis[idx, ]
+testing  <- heart_dis[-idx, ]
+
+nrow(training); nrow(testing)
+table(training$num)
+prop.table(table(training$num))
+```
+
+### Exploratory Plots/Visualization
+```{r}
+# Density of cholesterol by disease presence
+if("chol" %in% names(training)){
+  ggplot(training, aes(x = chol, fill = num, colour = num)) +
+    geom_density(alpha = 0.2) +
+    labs(title = "Cholesterol distribution by heart disease", x = "chol")
+}
+
+# Age vs max heart rate colored by outcome
+if(all(c("age","thalach") %in% names(training))){
+  ggplot(training, aes(x = age, y = thalach, colour = num)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "Age vs Max Heart Rate", x = "age", y = "thalach")
+}
+
+# Chest pain type vs disease proportion
+if("cp" %in% names(training)){
+ggplot(training, aes(x = cp, fill = num)) + geom_bar(position = "fill") +
+labs(y = "Proportion", title = "Chest pain type vs disease proportion")
+}
+```
+
+# Baseline classification model 
+Computing majority-class baseline
+```{r}
+# Class proportions in training set
+cat("Training class distribution:\n")
+print(prop.table(table(training$num)))
+
+# Majority class prediction
+majority_class <- names(sort(table(training$num), decreasing = TRUE))[1]
+cat("\nMajority class (baseline):", majority_class, "\n")
+
+# Baseline predictions on testset
+baseline_pred <- factor(rep(majority_class, nrow(testing)), levels = levels(training$num))
+
+#Baseline performance
+baseline_cm <- confusionMatrix(baseline_pred, testing$num)
+cat("\nBaseline confusion matrix:\n")
+print(baseline_cm$table)
+cat("\nBaseline metrics:\n")
+print(baseline_cm$overall)
+```
+
+## Modeling
+
+### Logistic Regression
+- fit model on training and show summary
+- predict probabilities on testing and pick threshold
+- confusion matrix, accuracy, sensitivity, specificity
+- ROC + AUC
+
+### Random Forest
+- fit RF
+- predit probabilities and evaluate
+- show variable importance and interpret top 5 features
+
+### Decision Tree
+
+### Model tuned with caret
+- optimize for ROC
+- report tuned hyperparameters, cross-validated ROC, test-set ROC
+
+### Feature Selection and Comparison of Predictor Sets
+
+
