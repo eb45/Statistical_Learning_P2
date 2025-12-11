@@ -32,6 +32,8 @@ library(randomForest)
 library(pROC)
 library(MASS)
 library(ggplot2)
+library(rpart)
+library(rpart.plot)
 ```
 
 ### Introduction
@@ -50,12 +52,6 @@ heart_dis <- heart_dis[ , -c(1,4)]
 # Getting summary
 str(heart_dis)
 summary(heart_dis)
-```
-
-# Initial Visaulization of Data
-
-```{r}
-
 ```
 
 ### Missing values and imputation
@@ -231,7 +227,7 @@ print(glm_cm_best)
 ```
 
 ```{r}
-### Threshold trade-off plot (WORKING VERSION — independent & robust)
+### Threshold trade-off plot
 
 # 1. Create sequence of thresholds
 thrs <- seq(0.01, 0.99, by = 0.01)
@@ -284,12 +280,52 @@ ggplot(metrics_long, aes(x = threshold, y = value, colour = metric)) +
 
 ```
 
+### Decision Tree
+Referenced the Customer Churn case study.
+
+```{r}
+# minsplit: minimum number of observations in a node before before a split
+# maxdepth: maximum depth of any node of the final tree
+# cp: degree of complexity, the smaller the more branches
+control_shallow <- rpart.control(minsplit = 30, maxdepth = 3, cp = 0.001)
+```
+
+```{r}
+# Fit shallow decision tree
+set.seed(2025)
+dt_shallow <- rpart(num ~ ., data = training, method = "class", control = control_shallow)
+
+print(dt_shallow)
+summary(dt_shallow)
+
+# Plot shallow tree
+rpart.plot(dt_shallow,
+type = 2,
+extra = 104,
+fallen.leaves = TRUE,
+box.palette = "GnBu",
+shadow.col = "gray",
+nn = TRUE, # show node numbers (useful for rules)
+tweak = 1.1, 
+cex = 0.9, # font size
+main = "Pruned Decision Tree")
+```
+
+
+```{r}
+# Predictions
+dt_prob <- predict(dt_shallow, newdata = testing, type = "prob")[, "Yes"]
+dt_class_05 <- factor(ifelse(dt_prob > 0.5, "Yes", "No"), levels = levels(training$num))
+dt_cm_05 <- confusionMatrix(dt_class_05, testing$num, positive = "Yes")
+dt_cm_05
+```
+
+
 ### Random Forest
 -   fit RF
 -   predit probabilities and evaluate
 -   show variable importance and interpret top 5 features
 
-### Decision Tree
 
 ### Model tuned with caret
 
