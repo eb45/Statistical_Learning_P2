@@ -35,9 +35,11 @@ library(ggplot2)
 ```
 
 ### Introduction
-Brief: predict presence of heart disease (num) from clinical variables in heart_disease_uci.csv.
+
+Predict presence of heart disease (num) from clinical variables in heart_disease_uci.csv.
 
 ### Loading data
+
 ```{r}
 # Loading CSV
 heart_dis <- read.csv("heart_disease_uci.csv", stringsAsFactors = FALSE)
@@ -51,12 +53,13 @@ summary(heart_dis)
 ```
 
 # Initial Visaulization of Data
+
 ```{r}
 
 ```
 
-
 ### Missing values and imputation
+
 ```{r}
 # Look what values are missing
 VIM::aggr(heart_dis, numbers = TRUE, sortVars = TRUE, labels = names(heart_dis),
@@ -64,6 +67,7 @@ cex.axis = 0.7, gap = 1, ylab = c("Missing data","Pattern"))
 ```
 
 Use the mice library to inspect possible imputations
+
 ```{r}
 mice::md.pattern(heart_dis)
 
@@ -90,13 +94,16 @@ for (col in cols_to_impute) {
 ```
 
 Verify no null values remain:
+
 ```{r}
 sapply(heart_dis, function(x) sum(is.na(x)))
 summary(heart_dis)
 ```
 
 ### Feature Engineering
+
 Convert to binary presence (0 = no disease, 1 = disease)
+
 ```{r}
 if("num" %in% names(heart_dis)){
   heart_dis$num <- ifelse(as.numeric(heart_dis$num) > 0, 1, 0)
@@ -105,6 +112,7 @@ if("num" %in% names(heart_dis)){
 ```
 
 Convert obviously categorical numeric columns to factors
+
 ```{r}
 cat_vars <- c("sex","cp","fbs","restecg","exang","slope","ca","thal")
 cat_vars <- intersect(cat_vars, names(heart_dis))
@@ -114,6 +122,7 @@ str(heart_dis)
 ```
 
 ### Train/Test Split
+
 ```{r}
 set.seed(2025)
 idx <- createDataPartition(heart_dis$num, p = 0.8, list = FALSE)
@@ -127,6 +136,7 @@ prop.table(table(training$num))
 ```
 
 ### Exploratory Plots/Visualization
+
 ```{r}
 # Density of cholesterol by disease presence
 if("chol" %in% names(training)){
@@ -149,8 +159,10 @@ labs(y = "Proportion", title = "Chest pain type vs disease proportion")
 }
 ```
 
-# Baseline classification model 
+# Baseline classification model
+
 Computing majority-class baseline
+
 ```{r}
 # Class proportions in training set
 cat("Training class distribution:\n")
@@ -174,22 +186,114 @@ print(baseline_cm$overall)
 ## Modeling
 
 ### Logistic Regression
-- fit model on training and show summary
-- predict probabilities on testing and pick threshold
-- confusion matrix, accuracy, sensitivity, specificity
-- ROC + AUC
+Below I'm going to fit a logistic regression on the training set, eval it on the testset, inspect the ROC/AUC, choose an optimal threshold, and then interpret the main coefficients.
+
+Going to use glm function like the Credit Scoring Case study we did.
+
+```{r}
+logit.model <- glm(num ~ ., data = training, family = binomial(link = "logit"))
+summary(logit.model)
+```
+
+```{r}
+# Predicted probabilities on test set
+glm_prob <- predict(logit.model, newdata = testing, type = "response")
+head(glm_prob)
+```
+
+```{r}
+# default threshold = 0.5
+glm_pred_05 <- factor(ifelse(glm_prob > 0.5, "Yes", "No"), levels = levels(training$num))
+glm_cm_05 <- confusionMatrix(glm_pred_05, testing$num, positive = "Yes")
+print(glm_cm_05)
+```
+
+```{r}
+# ROC and AUC
+library(pROC)
+roc_glm <- roc(response = testing$num, predictor = glm_prob, levels = c("No", "Yes"))
+auc_glm <- as.numeric(auc(roc_glm))
+cat("Logistic AUC =", round(auc_glm, 3), "\n")
+plot.roc(roc_glm, col = "darkblue", print.auc = TRUE, legacy.axes = TRUE,
+main = paste0("Logistic ROC (AUC=", round(auc_glm,3), ")"))
+```
+
+```{r}
+# Optimal threshold and eval at that threshold
+best <- coords(roc_glm, "best", best.method = "youden", ret = c("threshold","sensitivity","specificity","accuracy"), transpose = FALSE)
+best
+best_thr <- as.numeric(best["threshold"])
+cat("Youden threshold =", round(best_thr,3), "\n")
+
+glm_pred_best <- factor(ifelse(glm_prob > best_thr, "Yes", "No"), levels = levels(training$num))
+glm_cm_best <- confusionMatrix(glm_pred_best, testing$num, positive = "Yes")
+print(glm_cm_best)
+```
+
+```{r}
+### Threshold trade-off plot (WORKING VERSION — independent & robust)
+
+# 1. Create sequence of thresholds
+thrs <- seq(0.01, 0.99, by = 0.01)
+
+# 2. Compute sensitivity, specificity, accuracy at each threshold
+metrics_list <- lapply(thrs, function(t) {
+  
+  pred <- factor(ifelse(glm_prob > t, "Yes", "No"),
+                 levels = levels(training$num))
+  
+  cm <- confusionMatrix(pred, testing$num, positive = "Yes")
+  
+  data.frame(
+    threshold   = t,
+    sensitivity = as.numeric(cm$byClass["Sensitivity"]),
+    specificity = as.numeric(cm$byClass["Specificity"]),
+    accuracy    = as.numeric(cm$overall["Accuracy"])
+  )
+})
+
+# 3. Combine all rows into one dataframe
+metrics_df <- do.call(rbind, metrics_list)
+
+# 4. Reshape for ggplot (long format)
+library(tidyr)
+metrics_long <- pivot_longer(
+  metrics_df,
+  cols = c(sensitivity, specificity, accuracy),
+  names_to = "metric",
+  values_to = "value"
+)
+
+# 5. Plot
+library(ggplot2)
+ggplot(metrics_long, aes(x = threshold, y = value, colour = metric)) +
+  geom_line(size = 0.9) +
+  geom_vline(xintercept = best_thr, linetype = "dashed") +
+  labs(
+    title = "Threshold trade-offs (Logistic Regression)",
+    x = "Threshold",
+    y = "Metric Value"
+  ) +
+  scale_colour_manual(values = c(
+    "sensitivity" = "blue",
+    "specificity" = "red",
+    "accuracy" = "darkgreen"
+  )) +
+  theme_minimal()
+
+
+```
 
 ### Random Forest
-- fit RF
-- predit probabilities and evaluate
-- show variable importance and interpret top 5 features
+-   fit RF
+-   predit probabilities and evaluate
+-   show variable importance and interpret top 5 features
 
 ### Decision Tree
 
 ### Model tuned with caret
-- optimize for ROC
-- report tuned hyperparameters, cross-validated ROC, test-set ROC
+
+-   optimize for ROC
+-   report tuned hyperparameters, cross-validated ROC, test-set ROC
 
 ### Feature Selection and Comparison of Predictor Sets
-
-
