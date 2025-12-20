@@ -322,14 +322,129 @@ dt_cm_05
 
 
 ### Random Forest
--   fit RF
--   predit probabilities and evaluate
--   show variable importance and interpret top 5 features
+```{r}
+# Make sure that there are no missing values
+sapply(training, function(x) sum(is.na(x)))
+sapply(testing,  function(x) sum(is.na(x)))
+
+which_row_nas_train <- which(rowSums(is.na(training))>0)
+length(which_row_nas_train)  # how many rows in training with any NA
+which_row_nas_test  <- which(rowSums(is.na(testing))>0)
+length(which_row_nas_test)
+
+impute_mode <- function(x) {
+ux <- unique(na.omit(x))
+ux[which.max(tabulate(match(x, ux)))]
+}
+
+impute_df <- function(df) {
+for(col in names(df)) {
+if(is.numeric(df[[col]])) {
+if(any(is.na(df[[col]]))) df[[col]][is.na(df[[col]])] <- median(df[[col]], na.rm = TRUE)
+} else {
+
+  if(is.character(df[[col]])) df[[col]][df[[col]]==""] <- NA
+if(any(is.na(df[[col]]))) {
+m <- impute_mode(df[[col]])
+df[[col]][is.na(df[[col]])] <- m
+}
+# ensure factors remain factors
+if(!is.factor(df[[col]])) df[[col]] <- factor(df[[col]])
+}
+}
+df
+}
+
+training <- impute_df(training)
+testing  <- impute_df(testing)
+
+sapply(training, function(x) sum(is.na(x)))
+sapply(testing,  function(x) sum(is.na(x)))
+
+# Ensure factor levels align between training and testing (important for predict)
+
+factor_cols <- names(training)[sapply(training, is.factor)]
+for(col in factor_cols) {
+
+# Unify levels: union of levels from both sets
+
+levs <- union(levels(training[[col]]), levels(testing[[col]]))
+training[[col]] <- factor(training[[col]], levels = levs)
+testing[[col]]  <- factor(testing[[col]],  levels = levs)
+}
+
+# Now re-run Random Forest (randomForest) - original format
+library(randomForest)
+library(caret)
+set.seed(2025)
+
+rf.train <- randomForest(num ~ .,
+data = training,
+ntree = 500,
+mtry = floor(sqrt(ncol(training) - 1)),
+importance = TRUE)
+
+# Predictions
+rf.pred <- predict(rf.train, newdata = testing)
+confusionMatrix(rf.pred, testing$num)
+
+# If you want probabilities/AUC
+
+rf.prob <- predict(rf.train, newdata = testing, type = "prob")[, "Yes"]
+library(pROC)
+roc_rf <- roc(response = testing$num, predictor = rf.prob, levels = c("No","Yes"))
+auc(roc_rf)
+```
 
 
 ### Model tuned with caret
 
--   optimize for ROC
--   report tuned hyperparameters, cross-validated ROC, test-set ROC
+```{r}
+ctrl_roc <- trainControl(
+method = "repeatedcv",
+number = 5,
+repeats = 3,
+classProbs = TRUE,
+summaryFunction = twoClassSummary,
+savePredictions = "final",
+verboseIter = TRUE
+)
+
+num_features <- ncol(training) - 1
+tune_grid <- expand.grid(
+mtry = unique(pmax(1, c(1, floor(sqrt(num_features)), floor(num_features/3)))),
+splitrule = "gini",
+min.node.size = c(1, 3, 5)
+)
+
+set.seed(2025)
+rf_tuned <- train(
+num ~ .,
+data = training,
+method = "ranger",
+metric = "ROC",
+tuneGrid = tune_grid,
+trControl = ctrl_roc,
+num.trees = 1000,
+importance = "impurity"
+)
+
+rf_tuned
+rf_tuned$bestTune
+
+
+best_row <- rf_tuned$results[
+which(rf_tuned$results$mtry == rf_tuned$bestTune$mtry &
+rf_tuned$results$min.node.size == rf_tuned$bestTune$min.node.size), ]
+best_row[, c("ROC", "ROCSD")]
+
+rf_tuned_prob <- predict(rf_tuned, newdata = testing, type = "prob")[, "Yes"]
+roc_rf_tuned <- roc(response = testing$num, predictor = rf_tuned_prob, levels = c("No","Yes"))
+auc_test <- as.numeric(auc(roc_rf_tuned))
+auc_test
+
+plot.roc(roc_rf_tuned, print.auc = TRUE)
+
+```
 
 ### Feature Selection and Comparison of Predictor Sets
