@@ -447,4 +447,12 @@ plot.roc(roc_rf_tuned, print.auc = TRUE)
 
 ```
 
-### Feature Selection and Comparison of Predictor Sets
+### Add SGboost
+
+## Interpretability
+
+## Using function varimp to plot variable importance
+
+# Feature selection take most important variables
+
+## Partial dependence plot
